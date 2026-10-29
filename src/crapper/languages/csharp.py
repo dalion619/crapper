@@ -8,7 +8,8 @@ discard, and `&&`, `||`, `??`, `?.`, and the `and` / `or` patterns. Like the
 plugin, unary `!` and `not` are not decisions.
 
 Methods, constructors, finalizers, operators, and property, indexer, and event
-accessors with a body are entries. Lambdas and local functions stay inside the
+accessors with a body are entries. An explicit interface implementation is
+named `IStorage.Load`. Lambdas and local functions stay inside the
 enclosing member. Nested types become their own namespace (`Ns.Outer.Inner`).
 """
 
@@ -109,6 +110,19 @@ def _qualify(data: bytes, node) -> str:
     return ".".join(_file_scoped(data, node) + chain)
 
 
+def _explicit(data: bytes, node, name: str | None) -> str | None:
+    """`IStorage.Load` for an explicit interface implementation, so it does not
+    collide with a public `Load` on the same class."""
+
+    if name is None:
+        return None
+    specifier = next((c for c in node.children if c.type == "explicit_interface_specifier"), None)
+    if specifier is None:
+        return name
+    interface = node_text(data, specifier).rstrip(".").strip()
+    return f"{interface}.{name}"
+
+
 def _member_name(data: bytes, node) -> str | None:
     kind = node.type
     if kind == "destructor_declaration":
@@ -120,13 +134,13 @@ def _member_name(data: bytes, node) -> str | None:
     if kind == "conversion_operator_declaration":
         target = _text(data, node, "type")
         return f"operator {target}" if target else None
-    return _text(data, node, "name")
+    return _explicit(data, node, _text(data, node, "name"))
 
 
 def _property_name(data: bytes, node) -> str | None:
     if node.type == "indexer_declaration":
-        return "this[]"
-    return _text(data, node, "name")
+        return _explicit(data, node, "this[]")
+    return _explicit(data, node, _text(data, node, "name"))
 
 
 def _function(data: bytes, node, name: str, path: str) -> Function:

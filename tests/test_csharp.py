@@ -96,6 +96,26 @@ namespace Outer {
     }
 
 
+def test_explicit_interface_members_carry_the_interface():
+    found = functions_in_source(
+        """
+class Storage : IStorage {
+    public int Load(int id) => id;
+    int IStorage.Load(int id) => Load(id);
+    int IStorage.Size { get { return 1; } }
+    string IList<string>.this[int i] => "";
+}
+""",
+        "a.cs",
+    )
+    assert [function.name for function in found] == [
+        "Load",
+        "IStorage.Load",
+        "IStorage.Size.get",
+        "IList<string>.this[].get",
+    ]
+
+
 def test_lambdas_and_local_functions_stay_in_the_member():
     found = _by_name(
         """

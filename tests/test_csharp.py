@@ -2,7 +2,14 @@ from pathlib import Path
 
 from crapper.discover import is_test_file, language_of
 from crapper.languages.csharp import functions_in_source
-from crapper.runners import csharp_coverage_command, csharp_modules, merge_lcov_reports
+from crapper.runners import (
+    cobertura_to_lcov,
+    csharp_coverage_command,
+    csharp_modules,
+    csharp_reports,
+    merge_lcov_reports,
+    uses_testing_platform,
+)
 
 
 def _by_name(source: str) -> dict[str, object]:
@@ -163,6 +170,87 @@ def test_coverage_command_asks_coverlet_for_lcov(tmp_path):
     command = csharp_coverage_command(tmp_path)
     assert command[:4] == ["dotnet", "test", "--collect", "XPlat Code Coverage"]
     assert command[-1].endswith("Format=lcov")
+
+
+def test_testing_platform_comes_from_the_nearest_global_json(tmp_path):
+    module = tmp_path / "api"
+    module.mkdir()
+    assert not uses_testing_platform(module)
+    (tmp_path / "global.json").write_text(
+        '{"sdk": {"version": "10.0.100"}, "test": {"runner": "Microsoft.Testing.Platform"}}',
+        encoding="utf-8",
+    )
+    assert uses_testing_platform(module)
+    (module / "global.json").write_text('{"sdk": {"version": "10.0.100"}}', encoding="utf-8")
+    assert not uses_testing_platform(module)
+
+
+def test_coverage_command_on_testing_platform_asks_for_cobertura(tmp_path):
+    command = csharp_coverage_command(tmp_path, testing_platform=True)
+    assert command == [
+        "dotnet",
+        "test",
+        "--results-directory",
+        str(tmp_path),
+        "--coverage",
+        "--coverage-output-format",
+        "cobertura",
+    ]
+
+
+def test_cobertura_becomes_lcov_with_hits_summed_per_file():
+    cobertura = """\ufeff<?xml version="1.0" encoding="utf-8"?>
+<coverage><packages><package name="Demo"><classes>
+  <class name="Demo.Board" filename="/src/Board.cs">
+    <methods><method name="Score"><lines><line number="3" hits="9" branch="False" /></lines></method></methods>
+    <lines>
+      <line number="3" hits="1" branch="False" />
+      <line number="4" hits="0" branch="True" condition-coverage="50% (1/2)" />
+    </lines>
+  </class>
+  <class name="Demo.Board" filename="/src/Board.cs">
+    <lines><line number="3" hits="2" branch="False" /></lines>
+  </class>
+</classes></package></packages></coverage>"""
+    assert cobertura_to_lcov(cobertura) == (
+        "SF:/src/Board.cs\nDA:3,3\nDA:4,0\nBRDA:4,0,0,1\nBRDA:4,0,1,0\nend_of_record\n"
+    )
+
+
+def test_cobertura_resolves_relative_filenames_against_sources():
+    cobertura = """<coverage><sources><source>/repo/src</source></sources>
+<packages><package><classes><class filename="Demo/Board.cs">
+  <lines><line number="7" hits="4" /></lines>
+</class></classes></package></packages></coverage>"""
+    assert cobertura_to_lcov(cobertura) == "SF:/repo/src/Demo/Board.cs\nDA:7,4\nend_of_record\n"
+
+
+def test_cobertura_keeps_a_relative_filename_when_there_are_no_sources():
+    cobertura = """<coverage><packages><package><classes><class filename="Demo/Board.cs">
+  <lines><line number="7" hits="4" /></lines>
+</class></classes></package></packages></coverage>"""
+    assert cobertura_to_lcov(cobertura) == "SF:Demo/Board.cs\nDA:7,4\nend_of_record\n"
+
+
+def test_testing_platform_reports_are_read_from_cobertura(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "1.cobertura.xml").write_text(
+        '<coverage><packages><package><classes><class filename="/src/A.cs">'
+        '<lines><line number="2" hits="5" /></lines></class></classes></package></packages></coverage>',
+        encoding="utf-8",
+    )
+    (tmp_path / "coverage.info").write_text("SF:/ignored.cs\nend_of_record\n", encoding="utf-8")
+    texts, needs = csharp_reports(tmp_path, testing_platform=True)
+    assert texts == ["SF:/src/A.cs\nDA:2,5\nend_of_record\n"]
+    assert "Microsoft.Testing.Extensions.CodeCoverage" in needs
+
+
+def test_vstest_reports_are_read_from_coverlet_lcov(tmp_path):
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "coverage.info").write_text("SF:/src/A.cs\nDA:2,1\nend_of_record\n", encoding="utf-8")
+    texts, needs = csharp_reports(tmp_path, testing_platform=False)
+    assert texts == ["SF:/src/A.cs\nDA:2,1\nend_of_record\n"]
+    assert "coverlet.collector" in needs
 
 
 def test_merge_sums_hits_across_test_projects():

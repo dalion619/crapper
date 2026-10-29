@@ -80,7 +80,7 @@ By default a run deletes the previous report for each language it is about to me
 | --- | --- | --- |
 | Clojure | `clj -M:cov --lcov` (needs `deps.edn` or `bb.edn`) | `target/coverage/` |
 | Java | JaCoCo Maven plugin `0.8.12` in each module with `pom.xml` | `target/site/jacoco/jacoco.xml` |
-| C# | `dotnet test --collect "XPlat Code Coverage"` with coverlet's LCOV format, in the nearest `.sln` / `.slnx`, else `.csproj` (test projects need `coverlet.collector`) | `target/coverage/csharp/lcov.info` |
+| C# | `dotnet test --collect "XPlat Code Coverage"` with coverlet's LCOV format, in the nearest `.sln` / `.slnx`, else `.csproj` (test projects need `coverlet.collector`). When the nearest `global.json` sets `"test": {"runner": "Microsoft.Testing.Platform"}`, `dotnet test --coverage --coverage-output-format cobertura` instead (test projects need `Microsoft.Testing.Extensions.CodeCoverage`, which `MSTest.Sdk` includes), converted to LCOV | `target/coverage/csharp/lcov.info` |
 | Go | `go test ./... -coverprofile=...` | `target/coverage/go/coverage.out` |
 | TypeScript | `npm run coverage`, or Vitest `--coverage`, or `npx c8 ... npm test` | `coverage/lcov.info` or `target/coverage/typescript/lcov.info` |
 | Rust | `cargo llvm-cov` or `cargo tarpaulin`, per Cargo package | `target/coverage/rust/lcov.info` |

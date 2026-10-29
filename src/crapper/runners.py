@@ -7,10 +7,12 @@ tool, or a failed run, scores its functions at 0%.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
 from crapper.discover import is_test_file, language_of
@@ -575,7 +577,38 @@ def _nearest_glob(start: Path, patterns: tuple[str, ...], stop: Path) -> Path | 
         current = current.parent
 
 
-def csharp_coverage_command(results: Path) -> list[str]:
+_TESTING_PLATFORM = re.compile(r'"runner"\s*:\s*"Microsoft\.Testing\.Platform"')
+
+
+def uses_testing_platform(module: Path) -> bool:
+    """True when the global.json `dotnet test` reads opts into Microsoft.Testing.Platform.
+
+    In that mode `dotnet test` rejects VSTest's `--collect`, so coverlet never runs.
+    `dotnet` reads the nearest global.json at or above the directory it runs in.
+    """
+
+    current = Path(module).resolve()
+    while True:
+        candidate = current / "global.json"
+        if candidate.is_file():
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+            return bool(_TESTING_PLATFORM.search(text))
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
+def csharp_coverage_command(results: Path, testing_platform: bool = False) -> list[str]:
+    if testing_platform:
+        return [
+            "dotnet",
+            "test",
+            "--results-directory",
+            str(results),
+            "--coverage",
+            "--coverage-output-format",
+            "cobertura",
+        ]
     return [
         "dotnet",
         "test",
@@ -586,6 +619,62 @@ def csharp_coverage_command(results: Path) -> list[str]:
         "--",
         _COVERLET_LCOV,
     ]
+
+
+_CONDITIONS = re.compile(r"\((\d+)/(\d+)\)")
+
+
+def cobertura_to_lcov(text: str) -> str:
+    """LCOV from a Cobertura report, the format Microsoft.Testing.Platform writes.
+
+    Only each class's own `<lines>` are read; the per-method copies repeat them.
+    A branch line's `condition-coverage="50% (1/2)"` becomes one BRDA per
+    condition, the covered ones first, since Cobertura keeps only the counts.
+    """
+
+    root = ElementTree.fromstring(text.lstrip("\ufeff").encode("utf-8"))
+    sources = [source.text.strip() for source in root.iter("source") if source.text]
+    reports = [_cobertura_class(cls, sources) for cls in root.iter("class") if cls.get("filename")]
+    return merge_lcov_reports(reports)
+
+
+def _cobertura_class(cls: ElementTree.Element, sources: list[str]) -> str:
+    filename = cls.get("filename", "")
+    if not Path(filename).is_absolute() and sources:
+        filename = str(Path(sources[0]) / filename)
+    out = [f"SF:{filename}"]
+    branches: list[str] = []
+    for line in cls.findall("./lines/line"):
+        number = line.get("number")
+        out.append(f"DA:{number},{line.get('hits', '0')}")
+        branches.extend(_cobertura_branches(number, line.get("condition-coverage")))
+    return "\n".join(out + branches + ["end_of_record"]) + "\n"
+
+
+def _cobertura_branches(number: str | None, condition_coverage: str | None) -> list[str]:
+    conditions = _CONDITIONS.search(condition_coverage or "")
+    if not conditions:
+        return []
+    covered, total = int(conditions.group(1)), int(conditions.group(2))
+    return [f"BRDA:{number},0,{index},{int(index < covered)}" for index in range(total)]
+
+
+def csharp_reports(results: Path, testing_platform: bool) -> tuple[list[str], str]:
+    """LCOV texts found under `results`, and what a test project needs when there are none."""
+
+    if testing_platform:
+        texts = [
+            cobertura_to_lcov(path.read_text(encoding="utf-8", errors="replace"))
+            for path in sorted(results.rglob("*.cobertura.xml"))
+        ]
+        return texts, (
+            "Test projects need Microsoft.Testing.Extensions.CodeCoverage (MSTest.Sdk includes it)."
+        )
+    texts = [
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in sorted(results.rglob("coverage.info"))
+    ]
+    return texts, "Test projects need the coverlet.collector package."
 
 
 def merge_lcov_reports(texts: list[str]) -> str:
@@ -643,18 +732,16 @@ def _cover_csharp(root: Path, files: list[Path]) -> None:
         report = _coverage_report(root, module, "csharp")
         _prepare_report(report)
         results = report.parent / "raw"
-        code = run_shell(csharp_coverage_command(results), module)
-        texts = [
-            path.read_text(encoding="utf-8", errors="replace")
-            for path in sorted(results.rglob("coverage.info"))
-        ]
+        testing_platform = uses_testing_platform(module)
+        code = run_shell(csharp_coverage_command(results, testing_platform), module)
+        texts, needs = csharp_reports(results, testing_platform)
         if texts:
             report.write_text(merge_lcov_reports(texts), encoding="utf-8")
         shutil.rmtree(results, ignore_errors=True)
         if not texts:
             _warn(
-                f"C# coverage exited {code} in {module} and wrote no LCOV. "
-                "Test projects need the coverlet.collector package. C# coverage will score 0%."
+                f"C# coverage exited {code} in {module} and wrote no coverage. "
+                f"{needs} C# coverage will score 0%."
             )
         elif code != 0:
             _warn(f"C# tests exited {code} in {module}. Coverage was still recorded.")

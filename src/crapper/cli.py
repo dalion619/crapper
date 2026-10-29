@@ -42,7 +42,7 @@ Detect the language of each source file and score it with the CRAP metric
 CRAP = CC² × (1 − coverage)³ + CC. Writes .metrics/crap.edn for uml-viewer
 and prints a report sorted worst first.
 
-Languages: Clojure (.clj .cljc .cljs .bb), Java (.java), Go (.go),
+Languages: Clojure (.clj .cljc .cljs .bb), Java (.java), C# (.cs), Go (.go),
 TypeScript and JavaScript (.ts .tsx .mts .cts .js .jsx .mjs .cjs),
 Rust (.rs), Python (.py).
 
@@ -72,6 +72,7 @@ named {_SKIPPED_DIRS} are skipped, as are {_TEST_PATTERNS}.
 Coverage, when it is produced:
   Clojure      clj -M:cov --lcov, then Cloverage form counts or LCOV
   Java         Maven JaCoCo instruction coverage, for each pom.xml module
+  C#           dotnet test with coverlet LCOV, per solution or project
   Go           go test ./... -coverprofile=...
   TypeScript   npm run coverage, Vitest's own LCOV, or c8 around npm test
   Rust         cargo llvm-cov, or cargo tarpaulin, in the nearest Cargo.toml
@@ -80,6 +81,7 @@ Coverage, when it is produced:
 uml-viewer joins .metrics/crap.edn on :namespace and :name.
   Clojure      the ns, and the defn name
   Java         package.Class, and the method name
+  C#           Namespace.Class, and the member name
   Go           import path, or import.path.Receiver for methods
   TypeScript   dotted module path, or module.Class for methods
   Rust         crate::module, or crate::module::Type for methods

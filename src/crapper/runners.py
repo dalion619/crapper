@@ -70,7 +70,7 @@ def _clean_dir(path: Path) -> None:
         shutil.rmtree(path)
 
 
-_COVERAGE_DIRS = {"typescript", "rust", "go", "python"}
+_COVERAGE_DIRS = {"typescript", "rust", "go", "python", "csharp"}
 
 
 def _outside_language_dirs(coverage: Path, path: Path) -> bool:
@@ -545,6 +545,121 @@ def _cover_python(root: Path, files: list[Path]) -> None:
         _record_python_lcov(package, run_shell(run_cmd, package), data_file, lcov_cmd)
 
 
+_DOTNET_SOLUTIONS = ("*.sln", "*.slnx")
+_COVERLET_LCOV = "DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=lcov"
+
+
+def csharp_modules(root: Path, files: list[Path]) -> list[Path]:
+    """Directories to run `dotnet test` in: the nearest solution, else the nearest project."""
+
+    modules: set[Path] = set()
+    root = root.resolve()
+    for file in files:
+        if Path(file).suffix != ".cs":
+            continue
+        module = _nearest_glob(Path(file), _DOTNET_SOLUTIONS, root)
+        if module is None:
+            module = _nearest_glob(Path(file), ("*.csproj",), root)
+        if module is not None:
+            modules.add(module.resolve())
+    return sorted(modules)
+
+
+def _nearest_glob(start: Path, patterns: tuple[str, ...], stop: Path) -> Path | None:
+    current = start if start.is_dir() else start.parent
+    while True:
+        if any(any(current.glob(pattern)) for pattern in patterns):
+            return current
+        if current == stop or current.parent == current:
+            return None
+        current = current.parent
+
+
+def csharp_coverage_command(results: Path) -> list[str]:
+    return [
+        "dotnet",
+        "test",
+        "--collect",
+        "XPlat Code Coverage",
+        "--results-directory",
+        str(results),
+        "--",
+        _COVERLET_LCOV,
+    ]
+
+
+def merge_lcov_reports(texts: list[str]) -> str:
+    """One LCOV with hits summed per file, line, and branch.
+
+    Coverlet writes one report per test project, and each lists every source
+    file of the assemblies it loaded. Summing keeps a file covered by one test
+    project from being overwritten by another project's zero hits.
+    """
+
+    lines: dict[str, dict[int, int]] = {}
+    branches: dict[str, dict[tuple[str, str, str], int]] = {}
+    for text in texts:
+        current = None
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line.startswith("SF:"):
+                current = line[3:]
+                lines.setdefault(current, {})
+                branches.setdefault(current, {})
+            elif line == "end_of_record":
+                current = None
+            elif current is not None and line.startswith("DA:"):
+                number, hits = line[3:].split(",")[:2]
+                record = lines[current]
+                record[int(number)] = record.get(int(number), 0) + int(hits)
+            elif current is not None and line.startswith("BRDA:"):
+                number, block, branch, taken = line[5:].split(",")[:4]
+                key = (number, block, branch)
+                count = 0 if taken == "-" else int(taken)
+                record = branches[current]
+                record[key] = record.get(key, 0) + count
+    out: list[str] = []
+    for source in sorted(lines):
+        out.append(f"SF:{source}")
+        for number in sorted(lines[source]):
+            out.append(f"DA:{number},{lines[source][number]}")
+        for (number, block, branch), taken in sorted(
+            branches[source].items(), key=lambda item: (int(item[0][0]), item[0][1], item[0][2])
+        ):
+            out.append(f"BRDA:{number},{block},{branch},{taken}")
+        out.append("end_of_record")
+    return "\n".join(out) + ("\n" if out else "")
+
+
+def _cover_csharp(root: Path, files: list[Path]) -> None:
+    modules = csharp_modules(root, files)
+    if not modules:
+        _warn("No .sln, .slnx, or .csproj; skipping C# coverage.")
+        return
+    if shutil.which("dotnet") is None:
+        _warn("dotnet is not installed. C# coverage will score 0%.")
+        return
+    for module in modules:
+        report = _coverage_report(root, module, "csharp")
+        _prepare_report(report)
+        results = report.parent / "raw"
+        code = run_shell(csharp_coverage_command(results), module)
+        texts = [
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in sorted(results.rglob("coverage.info"))
+        ]
+        if texts:
+            report.write_text(merge_lcov_reports(texts), encoding="utf-8")
+        shutil.rmtree(results, ignore_errors=True)
+        if not texts:
+            _warn(
+                f"C# coverage exited {code} in {module} and wrote no LCOV. "
+                "Test projects need the coverlet.collector package. C# coverage will score 0%."
+            )
+        elif code != 0:
+            _warn(f"C# tests exited {code} in {module}. Coverage was still recorded.")
+
+
 def _cover_rust(root: Path, files: list[Path]) -> None:
     modules = rust_modules(root, files)
     if not modules:
@@ -585,6 +700,8 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
         _cover_clojure(root)
     if "java" in languages:
         _cover_java(root, files)
+    if "csharp" in languages:
+        _cover_csharp(root, files)
     if "go" in languages:
         _cover_go(root, files)
     if "typescript" in languages:

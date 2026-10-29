@@ -1,6 +1,6 @@
 # crapper
 
-CRAP scores for Clojure, Java, Go, TypeScript, Rust, and Python. One run detects the language of each source file, applies that language's complexity and coverage rules, and writes the snapshot [uml-viewer](https://github.com/unclebob/uml-viewer) already reads.
+CRAP scores for Clojure, Java, C#, Go, TypeScript, Rust, and Python. One run detects the language of each source file, applies that language's complexity and coverage rules, and writes the snapshot [uml-viewer](https://github.com/unclebob/uml-viewer) already reads.
 
 The formula is the one from [crap4clj](https://github.com/unclebob/crap4clj), [crap4java](https://github.com/unclebob/crap4java), and [crap4go](https://github.com/unclebob/crap4go):
 
@@ -16,7 +16,7 @@ CRAP = CC² × (1 − coverage)³ + CC
 ./crapper
 ```
 
-The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
+The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, `target`, `bin`, and `obj`, and writes two results:
 
 - a table on stdout, worst score first
 - `.metrics/crap.edn`, replaced on every successful analysis
@@ -48,6 +48,7 @@ uml-viewer groups entries by `:namespace` and joins each operation on `:name`. `
 | --- | --- | --- |
 | Clojure | the `ns` | the `defn` / `defn-` name |
 | Java | `package.Class`, or `package.Outer.Inner` | the method name |
+| C# | `Namespace.Class`, or `Namespace.Outer.Inner` | the member name, `Prop.get` / `Prop.set` for accessors |
 | Go | the package import path, or `import/path.Receiver` | the function or method name |
 | TypeScript | the dotted module path, or `module.Class` | the function or method name |
 | Rust | `crate::module`, or `crate::module::Type` | the function or method name |
@@ -60,6 +61,8 @@ Rename or move is a new entry. There is no identity matching across runs.
 Clojure follows crap4clj: `if` / `when` and their variants, `and`, `or`, `loop`, `catch`, and each clause of `cond`, `condp`, `case`, `cond->`, `cond->>`, `some->`, and `some->>`. Coverage prefers Cloverage's per-line form counts and falls back to LCOV.
 
 Java follows crap4java: `if`, loops, `catch`, `?:`, each `switch` label, and `&&` / `||`. Constructors and methods inside anonymous classes are omitted. Coverage is JaCoCo's `INSTRUCTION` counter.
+
+C# follows JetBrains' [ReSharper Cyclomatic Complexity plugin](https://github.com/JetBrains/resharper-cyclomatic-complexity), which scores the control-flow graph as edges − nodes + 2: `if`, loops, `catch`, a `when` filter or case guard, `?:`, each `case` but not `default`, each switch expression arm but not `_`, `&&`, `||`, `??`, `?.`, and the `and` / `or` patterns. Unary `!` and `not` are not decisions. Methods, constructors, finalizers, operators, and property, indexer, and event accessors with a body are entries; lambdas and local functions stay inside the enclosing member. Generated files (`*.g.cs`, `*.Designer.cs`) and files in projects named `*.Tests`, `*.Test`, `*.UnitTests`, `*.IntegrationTests`, or `*.Specs` are skipped. Coverage is coverlet's LCOV; reports from several test projects are merged by summing hits, and branch records win over line hits as for TypeScript.
 
 Go follows crap4go: `if`, `for`, `range`, each `switch` and `select` clause, and `&&` / `||`. Coverage is `go test -coverprofile`.
 
@@ -77,6 +80,7 @@ By default a run deletes the previous report for each language it is about to me
 | --- | --- | --- |
 | Clojure | `clj -M:cov --lcov` (needs `deps.edn` or `bb.edn`) | `target/coverage/` |
 | Java | JaCoCo Maven plugin `0.8.12` in each module with `pom.xml` | `target/site/jacoco/jacoco.xml` |
+| C# | `dotnet test --collect "XPlat Code Coverage"` with coverlet's LCOV format, in the nearest `.sln` / `.slnx`, else `.csproj` (test projects need `coverlet.collector`) | `target/coverage/csharp/lcov.info` |
 | Go | `go test ./... -coverprofile=...` | `target/coverage/go/coverage.out` |
 | TypeScript | `npm run coverage`, or Vitest `--coverage`, or `npx c8 ... npm test` | `coverage/lcov.info` or `target/coverage/typescript/lcov.info` |
 | Rust | `cargo llvm-cov` or `cargo tarpaulin`, per Cargo package | `target/coverage/rust/lcov.info` |
